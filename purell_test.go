@@ -221,6 +221,13 @@ var (
 			false,
 		},
 		{
+			"SortQueryEscapesKeys",
+			"http://root/toto/?b=2&a%20key=1",
+			FlagSortQuery,
+			"http://root/toto/?a+key=1&b=2",
+			false,
+		},
+		{
 			"RemoveEmptyQuerySeparator",
 			"http://root/toto/?",
 			FlagRemoveEmptyQuerySeparator,

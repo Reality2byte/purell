@@ -89,6 +89,24 @@ var rxHostDots = regexp.MustCompile(`^(.+?)(:\d+)?$`)
 var rxHostInteriorDots = regexp.MustCompile(`\.+`)
 var rxEmptyPort = regexp.MustCompile(`:+$`)
 
+var extraEscapeReplacer = strings.NewReplacer(
+	"%21", "!",
+	"%27", "'",
+	"%28", "(",
+	"%29", ")",
+	"%2A", "*",
+	"%5B", "[",
+	"%5D", "]",
+)
+
+var userinfoEscapeReplacer = strings.NewReplacer(
+	"%21", "!",
+	"%27", "'",
+	"%28", "(",
+	"%29", ")",
+	"%2A", "*",
+)
+
 // Map of flags to implementation function.
 // FlagDecodeUnnecessaryEscapes has no action, since it is done automatically
 // by parsing the string as an URL. Same for FlagUppercaseEscapes and FlagRemoveEmptyQuerySeparator.
@@ -180,7 +198,9 @@ func NormalizeURL(u *url.URL, f NormalizationFlags) string {
 			flags[k](u)
 		}
 	}
-	return escapeURL(u)
+	normalized := *u
+	normalizeEscapes(&normalized)
+	return normalizedString(&normalized)
 }
 
 func lowercaseScheme(u *url.URL) {
@@ -224,10 +244,8 @@ func addTrailingSlash(u *url.URL) {
 		if !strings.HasSuffix(u.Path, "/") {
 			u.Path += "/"
 		}
-	} else if l = len(u.Host); l > 0 {
-		if !strings.HasSuffix(u.Host, "/") {
-			u.Host += "/"
-		}
+	} else if u.Host != "" {
+		u.Path = "/"
 	}
 }
 
@@ -311,7 +329,9 @@ func sortQuery(u *url.URL) {
 				if buf.Len() > 0 {
 					buf.WriteRune('&')
 				}
-				buf.WriteString(fmt.Sprintf("%s=%s", k, url.QueryEscape(v)))
+				buf.WriteString(url.QueryEscape(k))
+				buf.WriteRune('=')
+				buf.WriteString(url.QueryEscape(v))
 			}
 		}
 
@@ -377,4 +397,64 @@ func removeEmptyPortSeparator(u *url.URL) {
 	if len(u.Host) > 0 {
 		u.Host = rxEmptyPort.ReplaceAllString(u.Host, "")
 	}
+}
+
+func normalizeEscapes(u *url.URL) {
+	u.RawPath = ""
+	if u.Path != "" {
+		u.RawPath = relaxedEscapes(u.EscapedPath())
+	}
+	u.RawFragment = ""
+	if u.Fragment != "" {
+		u.RawFragment = relaxedEscapes(u.EscapedFragment())
+	}
+	u.ForceQuery = false
+}
+
+func relaxedEscapes(escaped string) string {
+	relaxed := extraEscapeReplacer.Replace(escaped)
+	if relaxed == escaped {
+		return ""
+	}
+	return relaxed
+}
+
+func normalizedString(u *url.URL) string {
+	s := u.String()
+	if u.Opaque != "" {
+		return s
+	}
+	if u.User != nil {
+		userinfo := u.User.String()
+		s = strings.Replace(s, userinfo+"@", userinfoEscapeReplacer.Replace(userinfo)+"@", 1)
+	}
+	if u.Host != "" {
+		escapedHost := (&url.URL{Scheme: "http", Host: u.Host}).String()[len("http://"):]
+		hostStart := 0
+		if u.Scheme != "" {
+			hostStart = len(u.Scheme + "://")
+		} else if strings.HasPrefix(s, "//") {
+			hostStart = len("//")
+		}
+		if u.User != nil {
+			if i := strings.IndexByte(s[hostStart:], '@'); i >= 0 {
+				hostStart += i + 1
+			}
+		}
+		if strings.HasPrefix(s[hostStart:], escapedHost) {
+			s = s[:hostStart] + u.Host + s[hostStart+len(escapedHost):]
+		}
+	} else if u.User == nil && u.Scheme == "" {
+		if strings.HasPrefix(s, "./") {
+			if segment, _, _ := strings.Cut(u.Path, "/"); strings.Contains(segment, ":") {
+				s = s[2:]
+			}
+		}
+	} else if u.User == nil {
+		prefix := u.Scheme + ":"
+		if strings.HasPrefix(s, prefix) && !strings.HasPrefix(s, prefix+"//") {
+			s = prefix + "//" + s[len(prefix):]
+		}
+	}
+	return s
 }
